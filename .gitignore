@@ -1,0 +1,26 @@
+# Node dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+
+# Browser sessions / chromium profile
+tv-session/
+
+# TradingView cache
+Pinescripts/cache/
+.tradingview-cache/
+
+# Build folders
+dist/
+build/
+.next/
+
+# Environment secrets
+.env
+.env.local
+
+# OS files
+Thumbs.db
+.DS_Store

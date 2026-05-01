@@ -1,0 +1,46 @@
+{
+  "tradingview": {
+    "chartUrl": "https://www.tradingview.com/chart/",
+    "browserDebugUrl": "http://127.0.0.1:9222",
+    "sessionDir": "./tv-session",
+    "healthCheckIntervalMs": 10000,
+    "reconnectDelayMs": 5000,
+    "maxReconnectAttempts": 10
+  },
+  "pineScripts": {
+    "watchDir": "./Pinescripts",
+    "watchExtensions": [".pine"],
+    "deployQueueDelayMs": 2000,
+    "maxDeployRetries": 3,
+    "preValidate": true
+  },
+  "ollama": {
+    "baseUrl": "http://localhost:11434",
+    "model": "qwen2.5-coder:14b",
+    "timeoutMs": 120000,
+    "maxRetries": 3,
+    "retryDelayMs": 2000
+  },
+  "chartMonitor": {
+    "pollIntervalMs": 5000,
+    "screenshotOnSignal": true,
+    "screenshotDir": "./logs/screenshots"
+  },
+  "signalDetection": {
+    "enabled": true,
+    "minConfidence": 60,
+    "analysisIntervalMs": 30000,
+    "cooldownMs": 300000
+  },
+  "alerts": {
+    "webhookPort": 3000,
+    "apiKey": "",
+    "deduplicationWindowMs": 600000
+  },
+  "logging": {
+    "dir": "./logs",
+    "level": "info",
+    "maxFileSizeMb": 10,
+    "maxFiles": 5
+  }
+}

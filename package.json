@@ -1,0 +1,41 @@
+{
+  "name": "ai-trading-view",
+  "version": "2.0.0",
+  "description": "AI TradingView Autonomous Trading Assistant — Chart Monitor, Script Deployer, Signal Detector",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "build": "tsc",
+    "dev": "ts-node --transpile-only src/index.ts",
+    "start-deployer": "ts-node src/tradingview-bridge/pine-deployer.ts",
+    "start-webhook": "ts-node src/alert-server/webhook-server.ts",
+    "typecheck": "tsc --noEmit",
+    "launch-chrome": "start chrome --remote-debugging-port=9222 --user-data-dir=\"./tv-session\" https://www.tradingview.com/chart/"
+  },
+  "keywords": [
+    "tradingview",
+    "ai",
+    "trading",
+    "automation",
+    "puppeteer",
+    "ollama"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.15.2",
+    "chokidar": "^3.6.0",
+    "express": "^5.2.1",
+    "puppeteer": "^24.42.0",
+    "winston": "^3.17.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.6.0",
+    "@types/ws": "^8.18.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}
