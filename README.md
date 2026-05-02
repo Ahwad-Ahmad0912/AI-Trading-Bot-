@@ -419,18 +419,6 @@ AI Systems Developer • Full Stack Engineer • Automation Architect • Quant 
 
 ---
 
-# ⭐ Support This Project
-
-If this repository helped you or inspired your own autonomous trading assistant:
-
-> ⭐ Star this repo  
-> 🍴 Fork it  
-> 🧠 Build on top of it
-
----
-
-<div align="center">
-
 ## ⚠️ Disclaimer
 This software is built for educational research, AI automation experimentation, and TradingView workflow enhancement only.  
 </div>
