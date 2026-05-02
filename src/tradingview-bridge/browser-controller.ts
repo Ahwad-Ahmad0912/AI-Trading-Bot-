@@ -1,27 +1,33 @@
 // ─────────────────────────────────────────────
-// Browser Controller — Production-Grade
+// Browser Controller — Production-Grade (Multi-Chart)
 // ─────────────────────────────────────────────
 // Manages the Puppeteer connection to TradingView
 // with automatic reconnection, health checks,
-// and proper resource management.
+// and proper resource management for multiple tabs.
 
 import puppeteer, { Browser, Page, CDPSession } from "puppeteer";
 import { logger } from "../core/logger";
 import { eventBus } from "../core/event-bus";
 import { getConfig } from "../core/config-loader";
 
+export interface ChartPage {
+    symbol: string;
+    page: Page;
+    cdpSession: CDPSession | null;
+}
+
 export class BrowserController {
     private browser: Browser | null = null;
-    private page: Page | null = null;
-    private cdpSession: CDPSession | null = null;
+    private pages: Map<string, ChartPage> = new Map();
     private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
     private isConnected = false;
     private reconnectAttempts = 0;
 
-    async connect(): Promise<Page> {
+    async connect(): Promise<void> {
         const config = getConfig().tradingview;
         logger.browser("Connecting to Chrome debug session...", {
             url: config.browserDebugUrl,
+            symbols: config.symbols,
         });
 
         let lastError: Error | null = null;
@@ -33,66 +39,72 @@ export class BrowserController {
                     defaultViewport: null,
                 });
 
-                // Find existing TradingView chart tab
-                const pages = await this.browser.pages();
-                const tvPage = pages.find((p) =>
-                    p.url().includes("tradingview.com/chart")
-                );
-
-                if (tvPage) {
-                    this.page = tvPage;
-                    logger.browser("Attached to existing TradingView chart tab");
-                } else {
-                    this.page = await this.browser.newPage();
-                    await this.page.goto(config.chartUrl, {
-                        waitUntil: "domcontentloaded",
-                        timeout: 60000,
-                    });
-                    logger.browser("Opened new TradingView chart tab");
-                }
-
-                await this.page.bringToFront();
-
-                // Maximize window via CDP
-                try {
-                    this.cdpSession = await this.page.createCDPSession();
-                    const { windowId } = await this.cdpSession.send(
-                        "Browser.getWindowForTarget"
-                    );
-                    await this.cdpSession.send("Browser.setWindowBounds", {
-                        windowId,
-                        bounds: { windowState: "maximized" },
-                    });
-                    logger.browser("Window maximized via CDP");
-                } catch (cdpErr) {
-                    logger.warn("CDP maximize failed, continuing anyway", "browser");
-                }
-
-                // Set reasonable navigation timeout (2 minutes instead of infinity)
-                this.page.setDefaultNavigationTimeout(120000);
-                this.page.setDefaultTimeout(30000);
-
                 // Set up disconnect handler
                 this.browser.on("disconnected", () => {
                     logger.warn("Browser disconnected!", "browser");
                     this.isConnected = false;
                     this.stopHealthCheck();
+                    this.pages.clear();
                     eventBus.emit("chart:disconnected", {
                         reason: "Browser process disconnected",
                     });
                 });
 
+                const existingPages = await this.browser.pages();
+                this.pages.clear();
+
+                for (const symbol of config.symbols) {
+                    let page: Page | null = null;
+                    const targetUrlPart = `symbol=${symbol}`;
+
+                    // Find existing TradingView chart tab for this symbol
+                    const tvPage = existingPages.find((p) =>
+                        p.url().includes("tradingview.com/chart") && p.url().includes(targetUrlPart)
+                    );
+
+                    if (tvPage) {
+                        page = tvPage;
+                        logger.browser(`Attached to existing TradingView chart tab for ${symbol}`);
+                    } else {
+                        page = await this.browser.newPage();
+                        const url = `${config.baseUrl}?symbol=${symbol}`;
+                        logger.browser(`Opening new TradingView chart tab for ${symbol}: ${url}`);
+                        await page.goto(url, {
+                            waitUntil: "domcontentloaded",
+                            timeout: 60000,
+                        });
+                    }
+
+                    // Maximize window via CDP (only needed once, but safe to call per page)
+                    let cdpSession: CDPSession | null = null;
+                    try {
+                        cdpSession = await page.createCDPSession();
+                        const { windowId } = await cdpSession.send("Browser.getWindowForTarget");
+                        await cdpSession.send("Browser.setWindowBounds", {
+                            windowId,
+                            bounds: { windowState: "maximized" },
+                        });
+                    } catch (cdpErr) {
+                        logger.debug(`CDP maximize failed for ${symbol}, continuing anyway`, "browser");
+                    }
+
+                    // Set reasonable navigation timeouts
+                    page.setDefaultNavigationTimeout(120000);
+                    page.setDefaultTimeout(30000);
+
+                    this.pages.set(symbol, { symbol, page, cdpSession });
+                    eventBus.emit("chart:connected", { symbol, url: page.url() });
+                }
+
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
                 this.startHealthCheck();
 
-                eventBus.emit("chart:connected", { url: this.page.url() });
-                logger.browser("Successfully connected to TradingView", {
-                    url: this.page.url(),
+                logger.browser(`Successfully connected to ${this.pages.size} TradingView charts`, {
                     attempt,
                 });
 
-                return this.page;
+                return;
             } catch (err: unknown) {
                 lastError = err instanceof Error ? err : new Error(String(err));
                 logger.warn(
@@ -113,31 +125,51 @@ export class BrowserController {
         );
     }
 
-    /** Get the active TradingView page, reconnecting if needed */
-    async getPage(): Promise<Page> {
-        if (this.page && this.isConnected) {
-            // Quick liveness check
-            try {
-                await this.page.evaluate(() => document.title);
-                return this.page;
-            } catch {
-                logger.warn("Page is stale, reconnecting...", "browser");
-            }
+    /** Get the active TradingView page for a specific symbol */
+    async getPage(symbol: string): Promise<Page> {
+        if (!this.isConnected) {
+            await this.connect();
         }
 
-        return this.connect();
+        const chartPage = this.pages.get(symbol);
+        if (!chartPage) {
+            throw new Error(`No open page found for symbol: ${symbol}`);
+        }
+
+        // Quick liveness check
+        try {
+            await chartPage.page.evaluate(() => document.title);
+            return chartPage.page;
+        } catch {
+            logger.warn(`Page for ${symbol} is stale, reconnecting...`, "browser");
+            await this.connect();
+            return this.pages.get(symbol)!.page;
+        }
     }
 
-    /** Check if browser is connected and page is alive */
+    /** Get all managed pages */
+    getAllPages(): ChartPage[] {
+        return Array.from(this.pages.values());
+    }
+
+    /** Bring a specific chart to the front (required for DOM automation like paste) */
+    async bringToFront(symbol: string): Promise<void> {
+        const page = await this.getPage(symbol);
+        await page.bringToFront();
+        await this.sleep(500); // Give the browser time to focus
+    }
+
+    /** Check if browser is connected */
     get connected(): boolean {
-        return this.isConnected && this.page !== null;
+        return this.isConnected && this.pages.size > 0;
     }
 
     /** Take a screenshot of the current chart */
-    async screenshot(savePath: string): Promise<string> {
-        const page = await this.getPage();
+    async screenshot(symbol: string, savePath: string): Promise<string> {
+        const page = await this.getPage(symbol);
+        await page.bringToFront(); // Ensure it's active before screenshot
         await page.screenshot({ path: savePath, fullPage: false });
-        logger.browser("Screenshot saved", { path: savePath });
+        logger.browser(`Screenshot saved for ${symbol}`, { path: savePath });
         return savePath;
     }
 
@@ -146,15 +178,16 @@ export class BrowserController {
         this.stopHealthCheck();
         this.isConnected = false;
 
-        if (this.cdpSession) {
-            try {
-                await this.cdpSession.detach();
-            } catch { /* ignore */ }
-            this.cdpSession = null;
+        for (const { symbol, cdpSession } of this.pages.values()) {
+            if (cdpSession) {
+                try {
+                    await cdpSession.detach();
+                } catch { /* ignore */ }
+            }
         }
+        this.pages.clear();
 
         // Note: We DON'T close the browser since we attached to an existing session.
-        // The user's Chrome should keep running.
         if (this.browser) {
             try {
                 this.browser.disconnect();
@@ -162,7 +195,6 @@ export class BrowserController {
             this.browser = null;
         }
 
-        this.page = null;
         logger.browser("Disconnected from browser");
     }
 
@@ -174,9 +206,11 @@ export class BrowserController {
 
         this.healthCheckTimer = setInterval(async () => {
             try {
-                if (!this.page) throw new Error("No page reference");
-                await this.page.evaluate(() => document.readyState);
-            } catch {
+                if (this.pages.size === 0) throw new Error("No pages configured");
+                for (const { symbol, page } of this.pages.values()) {
+                    await page.evaluate(() => document.readyState);
+                }
+            } catch (err) {
                 logger.warn("Health check failed, attempting reconnection...", "browser");
                 this.isConnected = false;
                 this.stopHealthCheck();

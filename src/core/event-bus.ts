@@ -22,7 +22,7 @@ export interface BotEvents {
     "pine:error": { filePath: string; error: string };
 
     // Chart state
-    "chart:connected": { url: string };
+    "chart:connected": { symbol: string; url: string };
     "chart:disconnected": { reason: string };
     "chart:updated": ChartState;
     "chart:screenshot": { path: string; reason: string };

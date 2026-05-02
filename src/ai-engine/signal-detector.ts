@@ -84,7 +84,6 @@ export class SignalDetector {
         logger.info("Signal Detector stopped", "signal");
     }
 
-    /** Manually trigger a detection cycle */
     async runDetection(): Promise<TradeSignal[]> {
         const config = getConfig().signalDetection;
 
@@ -95,9 +94,9 @@ export class SignalDetector {
         }
         this.lastAnalysisTime = now;
 
-        const chartState = chartMonitor.getLastState();
-        if (!chartState || !chartState.symbol) {
-            logger.debug("No chart state available for signal detection", "signal");
+        const chartStates = chartMonitor.getAllStates();
+        if (chartStates.length === 0) {
+            logger.debug("No chart states available for signal detection", "signal");
             return [];
         }
 
@@ -107,96 +106,98 @@ export class SignalDetector {
             if (!ollamaClient.available) return [];
         }
 
-        logger.debug(`Running signal detection for ${chartState.symbol} ${chartState.timeframe}...`, "signal");
+        const allSignals: TradeSignal[] = [];
 
-        try {
-            const prompt = buildSignalDetectionPrompt(chartState);
-            const response = await ollamaClient.generateJSON<DetectionResponse>(
-                prompt,
-                SYSTEM_PROMPTS.signalDetector
-            );
+        for (const chartState of chartStates) {
+            if (!chartState.symbol) continue;
 
-            if (!response || !response.signalsDetected || !response.signals?.length) {
-                logger.debug("No signals detected in this cycle", "signal");
-                return [];
-            }
+            logger.debug(`Running signal detection for ${chartState.symbol} ${chartState.timeframe}...`, "signal");
 
-            // Log market summary
-            if (response.marketSummary) {
-                logger.signal(`Market: ${response.marketSummary}`, {
-                    bias: response.overallBias,
-                    symbol: chartState.symbol,
-                });
-            }
-
-            // Process detected signals
-            const signals: TradeSignal[] = [];
-
-            for (const raw of response.signals) {
-                const confidence = raw.confidence ?? 0;
-                if (confidence < config.minConfidence) {
-                    logger.debug(
-                        `Signal below threshold: ${raw.type} (${confidence}% < ${config.minConfidence}%)`,
-                        "signal"
-                    );
-                    continue;
-                }
-
-                // Deduplicate: skip if we've seen a very similar signal recently
-                const signalHash = `${raw.type}-${raw.direction}-${Math.round((raw.priceLevel ?? 0) * 100)}`;
-                if (this.lastSignalHashes.has(signalHash)) {
-                    logger.debug(`Duplicate signal skipped: ${signalHash}`, "signal");
-                    continue;
-                }
-
-                this.signalCounter++;
-                const signal: TradeSignal = {
-                    id: `sig_${Date.now()}_${this.signalCounter}`,
-                    timestamp: new Date(),
-                    symbol: chartState.symbol,
-                    timeframe: chartState.timeframe,
-                    type: this.parseSignalType(raw.type),
-                    direction: this.parseDirection(raw.direction),
-                    price: raw.priceLevel ?? chartState.currentPrice ?? 0,
-                    source: "AI Signal Detector",
-                    rawData: raw as unknown as Record<string, unknown>,
-                };
-
-                signals.push(signal);
-                this.lastSignalHashes.add(signalHash);
-
-                // Emit the signal
-                eventBus.emit("signal:detected", signal);
-
-                logger.signal(
-                    `🎯 SIGNAL: ${signal.type} | ${signal.direction} | ${signal.symbol} @ ${signal.price} | Confidence: ${confidence}%`,
-                    {
-                        signalId: signal.id,
-                        type: signal.type,
-                        direction: signal.direction,
-                        confidence,
-                        reasoning: raw.reasoning,
-                    }
+            try {
+                const prompt = buildSignalDetectionPrompt(chartState);
+                const response = await ollamaClient.generateJSON<DetectionResponse>(
+                    prompt,
+                    SYSTEM_PROMPTS.signalDetector
                 );
 
-                // Take screenshot if configured
-                if (getConfig().chartMonitor.screenshotOnSignal) {
-                    chartMonitor.takeScreenshot(`signal_${signal.type}`);
+                if (!response || !response.signalsDetected || !response.signals?.length) {
+                    logger.debug(`No signals detected in this cycle for ${chartState.symbol}`, "signal");
+                    continue;
                 }
-            }
 
-            // Clean old signal hashes (keep last 100)
-            if (this.lastSignalHashes.size > 100) {
-                const arr = Array.from(this.lastSignalHashes);
-                this.lastSignalHashes = new Set(arr.slice(-50));
-            }
+                // Log market summary
+                if (response.marketSummary) {
+                    logger.signal(`Market: ${response.marketSummary}`, {
+                        bias: response.overallBias,
+                        symbol: chartState.symbol,
+                    });
+                }
 
-            return signals;
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.error(`Signal detection failed: ${msg}`, "signal");
-            return [];
+                for (const raw of response.signals) {
+                    const confidence = raw.confidence ?? 0;
+                    if (confidence < config.minConfidence) {
+                        logger.debug(
+                            `Signal below threshold for ${chartState.symbol}: ${raw.type} (${confidence}% < ${config.minConfidence}%)`,
+                            "signal"
+                        );
+                        continue;
+                    }
+
+                    // Deduplicate: skip if we've seen a very similar signal recently
+                    const signalHash = `${raw.type}-${raw.direction}-${chartState.symbol}-${Math.round((raw.priceLevel ?? 0) * 100)}`;
+                    if (this.lastSignalHashes.has(signalHash)) {
+                        logger.debug(`Duplicate signal skipped: ${signalHash}`, "signal");
+                        continue;
+                    }
+
+                    this.signalCounter++;
+                    const signal: TradeSignal = {
+                        id: `sig_${Date.now()}_${this.signalCounter}`,
+                        timestamp: new Date(),
+                        symbol: chartState.symbol,
+                        timeframe: chartState.timeframe,
+                        type: this.parseSignalType(raw.type),
+                        direction: this.parseDirection(raw.direction),
+                        price: raw.priceLevel ?? chartState.currentPrice ?? 0,
+                        source: "AI Signal Detector",
+                        rawData: raw as unknown as Record<string, unknown>,
+                    };
+
+                    allSignals.push(signal);
+                    this.lastSignalHashes.add(signalHash);
+
+                    // Emit the signal
+                    eventBus.emit("signal:detected", signal);
+
+                    logger.signal(
+                        `🎯 SIGNAL: ${signal.type} | ${signal.direction} | ${signal.symbol} @ ${signal.price} | Confidence: ${confidence}%`,
+                        {
+                            signalId: signal.id,
+                            type: signal.type,
+                            direction: signal.direction,
+                            confidence,
+                            reasoning: raw.reasoning,
+                        }
+                    );
+
+                    // Take screenshot if configured
+                    if (getConfig().chartMonitor.screenshotOnSignal) {
+                        chartMonitor.takeScreenshot(chartState.symbol, `signal_${signal.type}`);
+                    }
+                }
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.error(`Signal detection failed for ${chartState.symbol}: ${msg}`, "signal");
+            }
         }
+
+        // Clean old signal hashes (keep last 100)
+        if (this.lastSignalHashes.size > 100) {
+            const arr = Array.from(this.lastSignalHashes);
+            this.lastSignalHashes = new Set(arr.slice(-50));
+        }
+
+        return allSignals;
     }
 
     get running(): boolean {

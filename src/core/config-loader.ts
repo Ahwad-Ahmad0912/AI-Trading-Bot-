@@ -13,7 +13,8 @@ const CONFIG_PATH = path.resolve(process.cwd(), "config.json");
 
 const DEFAULT_CONFIG: AppConfig = {
     tradingview: {
-        chartUrl: "https://www.tradingview.com/chart/",
+        baseUrl: "https://www.tradingview.com/chart/",
+        symbols: ["XAUUSD", "BTCUSD", "NAS100"],
         browserDebugUrl: "http://127.0.0.1:9222",
         sessionDir: "./tv-session",
         healthCheckIntervalMs: 10000,
@@ -100,7 +101,8 @@ export function loadConfig(): AppConfig {
         logger.info("Configuration loaded successfully", "system", {
             configPath: CONFIG_PATH,
             model: merged.ollama.model,
-            chartUrl: merged.tradingview.chartUrl,
+            baseUrl: merged.tradingview.baseUrl,
+            symbols: merged.tradingview.symbols.join(", "),
         });
 
         return merged;

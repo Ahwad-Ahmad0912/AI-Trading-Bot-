@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────
-// Script Monitor — Active Script & Favorites Tracker
+// Script Monitor — Active Script & Favorites Tracker (Multi-Chart)
 // ─────────────────────────────────────────────
 // Monitors all Pine indicators/strategies deployed
-// on the TradingView chart and tracks compilation
+// on all TradingView charts and tracks compilation
 // errors and script status changes.
 
 import { logger } from "../core/logger";
@@ -12,7 +12,8 @@ import { browserController } from "./browser-controller";
 import { ScriptInfo, IndicatorStatus } from "../types/chart";
 
 export class ScriptMonitor {
-    private knownScripts: Map<string, ScriptInfo> = new Map();
+    // Maps symbol -> (Maps script name -> ScriptInfo)
+    private knownScripts: Map<string, Map<string, ScriptInfo>> = new Map();
     private pollTimer: ReturnType<typeof setInterval> | null = null;
     private isRunning = false;
 
@@ -29,7 +30,7 @@ export class ScriptMonitor {
         }
 
         // Poll for changes
-        const intervalMs = getConfig().chartMonitor.pollIntervalMs * 2; // Slower than chart monitor
+        const intervalMs = getConfig().chartMonitor.pollIntervalMs * 2; 
         this.pollTimer = setInterval(async () => {
             try {
                 await this.scanScripts();
@@ -53,19 +54,36 @@ export class ScriptMonitor {
         logger.info("Script Monitor stopped", "automation");
     }
 
-    /** Get all known scripts */
-    getScripts(): ScriptInfo[] {
-        return Array.from(this.knownScripts.values());
+    /** Get all known scripts for a specific symbol */
+    getScripts(symbol: string): ScriptInfo[] {
+        const symbolMap = this.knownScripts.get(symbol);
+        return symbolMap ? Array.from(symbolMap.values()) : [];
     }
 
-    /** Get scripts with errors */
-    getErrorScripts(): ScriptInfo[] {
-        return this.getScripts().filter((s) => s.hasErrors);
+    /** Get scripts with errors across all charts */
+    getErrorScripts(): { symbol: string; script: ScriptInfo }[] {
+        const errors: { symbol: string; script: ScriptInfo }[] = [];
+        for (const [symbol, map] of this.knownScripts.entries()) {
+            for (const script of map.values()) {
+                if (script.hasErrors) {
+                    errors.push({ symbol, script });
+                }
+            }
+        }
+        return errors;
     }
 
-    /** Get active (healthy) scripts */
-    getActiveScripts(): ScriptInfo[] {
-        return this.getScripts().filter((s) => s.isActive && !s.hasErrors);
+    /** Get active (healthy) scripts across all charts */
+    getActiveScripts(): { symbol: string; script: ScriptInfo }[] {
+        const active: { symbol: string; script: ScriptInfo }[] = [];
+        for (const [symbol, map] of this.knownScripts.entries()) {
+            for (const script of map.values()) {
+                if (script.isActive && !script.hasErrors) {
+                    active.push({ symbol, script });
+                }
+            }
+        }
+        return active;
     }
 
     get running(): boolean {
@@ -75,97 +93,103 @@ export class ScriptMonitor {
     // ── Private Methods ──
 
     private async scanScripts(): Promise<void> {
-        const page = await browserController.getPage();
+        const pages = browserController.getAllPages();
 
-        const rawScripts = await page.evaluate(() => {
-            const scripts: Array<{
-                name: string;
-                hasError: boolean;
-                isVisible: boolean;
-                errorText: string;
-            }> = [];
+        for (const chartPage of pages) {
+            const { symbol, page } = chartPage;
 
-            // Read from chart legend — this shows all active indicators/strategies
-            const legendItems = document.querySelectorAll(
-                '[class*="sourcesWrapper"] [class*="item"], ' +
-                '[data-name="legend"] [class*="sources"] > div'
-            );
+            try {
+                const rawScripts = await page.evaluate(() => {
+                    const scripts: Array<{
+                        name: string;
+                        hasError: boolean;
+                        isVisible: boolean;
+                        errorText: string;
+                    }> = [];
 
-            legendItems.forEach((item) => {
-                const titleEl =
-                    item.querySelector('[class*="title"]') ||
-                    item.querySelector('[class*="description"]');
-                const name = titleEl?.textContent?.trim() || "";
-                if (!name) return;
+                    // Read from chart legend
+                    const legendItems = document.querySelectorAll(
+                        '[class*="sourcesWrapper"] [class*="item"], ' +
+                        '[data-name="legend"] [class*="sources"] > div'
+                    );
 
-                // Skip built-in items like "Volume", candlestick source
-                if (name === "Vol" || name === "Volume") return;
+                    legendItems.forEach((item) => {
+                        const titleEl =
+                            item.querySelector('[class*="title"]') ||
+                            item.querySelector('[class*="description"]');
+                        const name = titleEl?.textContent?.trim() || "";
+                        if (!name) return;
 
-                const hasError = !!(
-                    item.querySelector('[class*="error"]') ||
-                    item.querySelector('[class*="warning"]') ||
-                    item.querySelector('[class*="alert-error"]')
-                );
+                        if (name === "Vol" || name === "Volume") return;
 
-                // Check visibility (eye icon)
-                const eyeIcon = item.querySelector('[class*="eye"]');
-                const isVisible = eyeIcon
-                    ? !eyeIcon.classList.toString().includes("hidden")
-                    : true;
+                        const hasError = !!(
+                            item.querySelector('[class*="error"]') ||
+                            item.querySelector('[class*="warning"]') ||
+                            item.querySelector('[class*="alert-error"]')
+                        );
 
-                let errorText = "";
-                if (hasError) {
-                    const errorEl = item.querySelector('[class*="error"]');
-                    errorText = errorEl?.textContent?.trim() || "Unknown error";
+                        const eyeIcon = item.querySelector('[class*="eye"]');
+                        const isVisible = eyeIcon
+                            ? !eyeIcon.classList.toString().includes("hidden")
+                            : true;
+
+                        let errorText = "";
+                        if (hasError) {
+                            const errorEl = item.querySelector('[class*="error"]');
+                            errorText = errorEl?.textContent?.trim() || "Unknown error";
+                        }
+
+                        scripts.push({ name, hasError, isVisible, errorText });
+                    });
+
+                    return scripts;
+                });
+
+                if (!this.knownScripts.has(symbol)) {
+                    this.knownScripts.set(symbol, new Map());
+                }
+                const symbolScripts = this.knownScripts.get(symbol)!;
+                const currentNames = new Set<string>();
+
+                for (const raw of rawScripts) {
+                    currentNames.add(raw.name);
+
+                    const existing = symbolScripts.get(raw.name);
+                    const scriptInfo: ScriptInfo = {
+                        name: raw.name,
+                        type: "indicator",
+                        source: "chart",
+                        isActive: raw.isVisible,
+                        hasErrors: raw.hasError,
+                        lastDeployed: existing?.lastDeployed || null,
+                        errorMessage: raw.hasError ? raw.errorText : null,
+                    };
+
+                    if (existing) {
+                        if (!existing.hasErrors && raw.hasError) {
+                            logger.error(`Script error detected on ${symbol}: "${raw.name}" — ${raw.errorText}`, "automation");
+                            eventBus.emit("script:error", scriptInfo);
+                        } else if (existing.hasErrors && !raw.hasError) {
+                            logger.info(`Script recovered on ${symbol}: "${raw.name}"`, "automation");
+                            eventBus.emit("script:loaded", scriptInfo);
+                        }
+                    } else {
+                        logger.info(`Script found on ${symbol}: "${raw.name}" (${raw.hasError ? "ERROR" : "OK"})`, "automation");
+                        eventBus.emit("script:loaded", scriptInfo);
+                    }
+
+                    symbolScripts.set(raw.name, scriptInfo);
                 }
 
-                scripts.push({ name, hasError, isVisible, errorText });
-            });
-
-            return scripts;
-        });
-
-        // Track changes
-        const currentNames = new Set<string>();
-
-        for (const raw of rawScripts) {
-            currentNames.add(raw.name);
-
-            const existing = this.knownScripts.get(raw.name);
-            const scriptInfo: ScriptInfo = {
-                name: raw.name,
-                type: "indicator", // Default; can be refined
-                source: "chart",
-                isActive: raw.isVisible,
-                hasErrors: raw.hasError,
-                lastDeployed: existing?.lastDeployed || null,
-                errorMessage: raw.hasError ? raw.errorText : null,
-            };
-
-            // Detect state changes
-            if (existing) {
-                if (!existing.hasErrors && raw.hasError) {
-                    logger.error(`Script error detected: "${raw.name}" — ${raw.errorText}`, "automation");
-                    eventBus.emit("script:error", scriptInfo);
-                } else if (existing.hasErrors && !raw.hasError) {
-                    logger.info(`Script recovered: "${raw.name}"`, "automation");
-                    eventBus.emit("script:loaded", scriptInfo);
+                for (const [name] of symbolScripts) {
+                    if (!currentNames.has(name)) {
+                        logger.info(`Script removed from ${symbol}: "${name}"`, "automation");
+                        eventBus.emit("script:removed", { name });
+                        symbolScripts.delete(name);
+                    }
                 }
-            } else {
-                // New script detected on chart
-                logger.info(`Script found on chart: "${raw.name}" (${raw.hasError ? "ERROR" : "OK"})`, "automation");
-                eventBus.emit("script:loaded", scriptInfo);
-            }
-
-            this.knownScripts.set(raw.name, scriptInfo);
-        }
-
-        // Detect removed scripts
-        for (const [name] of this.knownScripts) {
-            if (!currentNames.has(name)) {
-                logger.info(`Script removed from chart: "${name}"`, "automation");
-                eventBus.emit("script:removed", { name });
-                this.knownScripts.delete(name);
+            } catch (err: unknown) {
+                // Ignore transient errors
             }
         }
     }

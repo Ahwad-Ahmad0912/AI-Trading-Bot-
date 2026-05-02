@@ -271,7 +271,21 @@ export class PineDeployer {
         // Step 2: Deploy via Pine Editor
         try {
             const scriptName = job.fileName.replace(/\.(pine|txt)$/, "");
-            const deployResult = await pineEditor.deployScript(job.code, scriptName);
+            const symbols = getConfig().tradingview.symbols;
+            
+            let anySuccess = false;
+            const allErrors: string[] = [];
+
+            for (const symbol of symbols) {
+                const deployResult = await pineEditor.deployScriptToChart(symbol, job.code, scriptName);
+                if (deployResult.success) {
+                    anySuccess = true;
+                } else if (deployResult.errors && deployResult.errors.length > 0) {
+                    allErrors.push(`[${symbol}]: ${deployResult.errors.join("; ")}`);
+                }
+            }
+
+            const deployResult = { success: anySuccess, errors: allErrors };
 
             const result: DeploymentResult = {
                 success: deployResult.success,

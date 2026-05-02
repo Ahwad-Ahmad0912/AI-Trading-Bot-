@@ -3,7 +3,8 @@
 // ─────────────────────────────────────────────
 
 export interface TradingViewConfig {
-    chartUrl: string;
+    baseUrl: string;
+    symbols: string[];
     browserDebugUrl: string;
     sessionDir: string;
     healthCheckIntervalMs: number;

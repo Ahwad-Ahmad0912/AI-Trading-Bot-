@@ -41,7 +41,7 @@ export class TradeAnalyzer {
         });
 
         // Use provided chart state or get latest from monitor
-        const state = chartState ?? chartMonitor.getLastState();
+        const state = chartState ?? chartMonitor.getLastState(signal.symbol);
 
         const prompt = buildTradeAnalysisPrompt(signal, state);
 

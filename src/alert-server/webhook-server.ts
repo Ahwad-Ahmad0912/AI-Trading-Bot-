@@ -141,7 +141,7 @@ export class WebhookServer {
                 eventBus.emit("alert:webhook", { body: body as Record<string, unknown> });
 
                 // Convert webhook to TradeSignal
-                const chartState = chartMonitor.getLastState();
+                const chartState = body.symbol ? chartMonitor.getLastState(body.symbol) : null;
                 const signal: TradeSignal = {
                     id: `webhook_${Date.now()}`,
                     timestamp: new Date(),
@@ -179,20 +179,16 @@ export class WebhookServer {
 
         // ── Status Dashboard ──
         this.app.get("/status", (_req: Request, res: Response) => {
-            const chartState = chartMonitor.getLastState();
+            const chartStates = chartMonitor.getAllStates();
             res.json({
-                chart: chartState
-                    ? {
-                          symbol: chartState.symbol,
-                          timeframe: chartState.timeframe,
-                          price: chartState.currentPrice,
-                          priceChange: chartState.priceChangePercent,
-                          indicators: chartState.activeIndicators.length,
-                          indicatorErrors: chartState.activeIndicators.filter(
-                              (i) => i.status === "error"
-                          ).length,
-                      }
-                    : null,
+                charts: chartStates.map(state => ({
+                    symbol: state.symbol,
+                    timeframe: state.timeframe,
+                    price: state.currentPrice,
+                    priceChange: state.priceChangePercent,
+                    indicators: state.activeIndicators.length,
+                    indicatorErrors: state.activeIndicators.filter(i => i.status === "error").length,
+                })),
                 scripts: {
                     deployed: pineDeployer.getDeployedScripts().length,
                     active: scriptMonitor.getActiveScripts().length,

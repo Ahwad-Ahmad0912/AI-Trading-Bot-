@@ -9,6 +9,8 @@ import { logger } from "../core/logger";
 import { eventBus } from "../core/event-bus";
 import { getConfig } from "../core/config-loader";
 import { tradeAnalyzer } from "../ai-engine/trade-analyzer";
+import { alertAutomator } from "../tradingview-bridge/alert-automator";
+import { showDesktopPopup } from "./desktop-alert";
 import { TradeSignal, SignalClassification, AlertPayload, AlertSeverity } from "../types/signals";
 
 export class AlertManager {
@@ -123,6 +125,17 @@ export class AlertManager {
 
         // Output to terminal with formatting
         this.printAlert(alert);
+
+        // Native TradingView Alert Integration & Desktop Popup
+        if (severity === "CRITICAL" || severity === "WARNING") {
+            // Trigger Desktop Popup
+            showDesktopPopup(alert);
+            
+            // Run TV Automator asynchronously to not block the event loop
+            alertAutomator.createAlert(signal.symbol, alert).catch(e => {
+                logger.error("Failed to trigger alert automator", "alert");
+            });
+        }
     }
 
     private logClassification(classification: SignalClassification): void {

@@ -1,6 +1,13 @@
 {
   "tradingview": {
-    "chartUrl": "https://www.tradingview.com/chart/",
+    "baseUrl": "https://www.tradingview.com/chart/",
+    "symbols": [
+      "XAUUSD",
+      "BTCUSD",
+      "NAS100",
+      "US30",
+      "EURUSD"
+    ],
     "browserDebugUrl": "http://127.0.0.1:9222",
     "sessionDir": "./tv-session",
     "healthCheckIntervalMs": 10000,
